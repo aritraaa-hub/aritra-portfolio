@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aritra Tarafder · Mask reveal</title>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* ===== Change the look here ===== */
+    :root {
+      --accent: #ff3b2f;
+      --bg: #121110;
+      --panel: #1a1917;
+      --text: #fbf9f5;
+      --muted: #a8a39b;
+      --frame: min(86vw, 440px);   /* size of the photo frame */
+      --sky: #4a95d1;              /* solid colour behind the masked photo, so nothing leaks at the edges */
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: "Geist", system-ui, sans-serif; }
+    body { min-height: 100vh; display: grid; place-items: center; padding: 32px 16px; }
+
+    .reveal { display: grid; justify-items: center; gap: 16px; }
+
+    /* Rounded square frame holding two stacked photos */
+    .frame {
+      position: relative; width: var(--frame); aspect-ratio: 1 / 1;
+      border-radius: 28px; overflow: hidden; background: var(--panel);
+      border: 1px solid rgba(255,255,255,.08);
+      box-shadow: 0 40px 80px -30px rgba(0,0,0,.8), 0 0 0 1px rgba(0,0,0,.4);
+      touch-action: none;           /* on phones, dragging moves the lens instead of scrolling */
+      cursor: crosshair; user-select: none; -webkit-user-select: none;
+      isolation: isolate;
+    }
+    .frame img {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; object-position: 50% 25%;   /* change 25% to move the photo up or down in the frame */
+      pointer-events: none; -webkit-user-drag: none;
+    }
+    /* Top layer: the Batman photo, shown only inside a round lens that follows the cursor */
+    .frame__mask {
+      position: absolute; inset: 0; background: var(--sky);
+      --mx: 50%; --my: 50%; --r: 0px;
+      -webkit-mask-image: radial-gradient(circle var(--r) at var(--mx) var(--my), #000 98%, transparent);
+              mask-image: radial-gradient(circle var(--r) at var(--mx) var(--my), #000 98%, transparent);
+    }
+    /* Thin ring that follows the lens */
+    .frame__ring {
+      position: absolute; left: 0; top: 0; border-radius: 50%; pointer-events: none;
+      border: 1.5px solid rgba(255,255,255,.75); box-shadow: 0 0 0 1px rgba(0,0,0,.25), 0 0 24px rgba(255,59,47,.25);
+      opacity: 0; will-change: transform, width, height;
+    }
+    .caption { font: 500 11px "Geist Mono", monospace; text-transform: uppercase; letter-spacing: .14em; color: var(--muted); }
+    .caption i { display: inline-block; width: 6px; height: 6px; margin-right: 8px; border-radius: 50%; background: var(--accent); }
+    @media (hover: none) { .caption .desk { display: none; } }
+    @media (hover: hover) { .caption .touch { display: none; } }
+  </style>
+</head>
+<body>
+  <main class="reveal">
+    <div class="frame" id="frame" aria-label="Photo of Aritra. Move your cursor over it to reveal the Batman version.">
+      <img id="imgNormal" alt="Aritra Tarafder" draggable="false" />
+      <div class="frame__mask" id="mask" aria-hidden="true"><img id="imgMasked" alt="" draggable="false" /></div>
+      <div class="frame__ring" id="ring" aria-hidden="true"></div>
+    </div>
+    <p class="caption"><i></i><span class="desk">Hover the photo</span><span class="touch">Touch and drag the photo</span></p>
+  </main>
+
+  <script>
+  /* ===== Change your details here ===== */
+  const CONFIG = {
+    normal: "assets/me-side.webp",   // the normal photo (bottom layer)
+    masked: "assets/me-mask.webp",   // the Batman version (revealed in the lens)
+    hoverRadius: 0.20,               // lens size on hover, as a share of the frame width
+    pressRadius: 0.32,               // lens size while the mouse button is held (or a finger is down)
+    ease: 0.18,                      // how smoothly the lens follows (lower = slower, softer)
+  };
+
+  const $ = (s) => document.querySelector(s);
+  const frame = $("#frame"), mask = $("#mask"), ring = $("#ring");
+  $("#imgNormal").src = CONFIG.normal;
+  $("#imgMasked").src = CONFIG.masked;
+
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const ease = reduceMotion ? 1 : CONFIG.ease;
+
+  let W = frame.clientWidth;
+  // cur = what is drawn now, tgt = where the lens wants to be
+  const cur = { x: W / 2, y: W / 2, r: 0 };
+  const tgt = { x: W / 2, y: W / 2, r: 0 };
+  let inside = false, pressed = false, raf = 0;
+
+  const radius = () => (pressed ? CONFIG.pressRadius : CONFIG.hoverRadius) * W;
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  function draw() {
+    cur.x = lerp(cur.x, tgt.x, ease);
+    cur.y = lerp(cur.y, tgt.y, ease);
+    cur.r = lerp(cur.r, tgt.r, ease);
+    if (Math.abs(cur.r - tgt.r) < 0.15) cur.r = tgt.r;
+
+    mask.style.setProperty("--mx", cur.x + "px");
+    mask.style.setProperty("--my", cur.y + "px");
+    mask.style.setProperty("--r", cur.r + "px");
+
+    const d = cur.r * 2;
+    ring.style.width = ring.style.height = d + "px";
+    ring.style.transform = `translate3d(${cur.x - cur.r}px, ${cur.y - cur.r}px, 0)`;
+    ring.style.opacity = cur.r > 1 ? "1" : "0";
+
+    // keep animating until the lens has caught up, then stop (saves battery)
+    const moving = Math.abs(cur.x - tgt.x) > 0.2 || Math.abs(cur.y - tgt.y) > 0.2 || cur.r !== tgt.r;
+    raf = moving ? requestAnimationFrame(draw) : 0;
+  }
+  const wake = () => { if (!raf) raf = requestAnimationFrame(draw); };
+
+  function aim(e) {
+    const b = frame.getBoundingClientRect();
+    tgt.x = e.clientX - b.left; tgt.y = e.clientY - b.top;
+  }
+
+  frame.addEventListener("pointerenter", (e) => {
+    inside = true; aim(e);
+    if (cur.r < 1) { cur.x = tgt.x; cur.y = tgt.y; }  // open the lens right under the cursor
+    tgt.r = radius(); wake();
+  });
+  frame.addEventListener("pointermove", (e) => {
+    if (!inside && e.pointerType === "mouse") return;
+    aim(e); tgt.r = radius(); wake();
+  });
+  frame.addEventListener("pointerdown", (e) => {
+    inside = true; pressed = true; aim(e);
+    if (cur.r < 1) { cur.x = tgt.x; cur.y = tgt.y; }
+    try { frame.setPointerCapture(e.pointerId); } catch (_) {}
+    tgt.r = radius(); wake();
+  });
+  const up = (e) => {
+    pressed = false;
+    if (e.pointerType !== "mouse") { inside = false; tgt.r = 0; } else tgt.r = radius();
+    wake();
+  };
+  frame.addEventListener("pointerup", up);
+  frame.addEventListener("pointercancel", up);
+  frame.addEventListener("pointerleave", (e) => {
+    if (pressed) return;          // keep the lens while dragging outside
+    inside = false; tgt.r = 0; wake();
+  });
+
+  // keep the lens in proportion if the window size changes
+  new ResizeObserver(() => {
+    const nw = frame.clientWidth, k = nw / W; W = nw;
+    cur.x *= k; cur.y *= k; tgt.x *= k; tgt.y *= k; cur.r *= k; tgt.r = inside ? radius() : 0;
+    wake();
+  }).observe(frame);
+  </script>
+</body>
+</html>
